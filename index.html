@@ -461,6 +461,26 @@
   footer{padding:34px 0 110px;text-align:center;color:var(--ink-soft)}
   footer .fname{font-family:"Anton",sans-serif;text-transform:uppercase;color:var(--red);font-size:1.4rem}
   footer p{margin:6px 0}
+
+  /* ---------- Animaciones de movimiento (reel): crossfade, shared element, magnification, blur ---------- */
+  /* 1) CROSSFADE — al cambiar de filtro, la lista del menú se desvanece y la nueva aparece */
+  .menu-filters{display:flex;flex-wrap:wrap;gap:10px;margin:-4px 0 20px}
+  .filter-chip{border:1px solid var(--glass-border);background:linear-gradient(145deg,#FFF9EF,#FDEBD3);box-shadow:var(--neu-shadow-sm);color:var(--ink);border-radius:999px;padding:10px 18px;font:inherit;font-weight:700;font-size:.92rem;cursor:pointer;min-height:44px;transition:transform .15s ease, box-shadow .15s ease, background .15s ease}
+  @media (prefers-color-scheme: dark){ .filter-chip{background:linear-gradient(145deg,#33200f,#24150a)} }
+  .filter-chip:active{box-shadow:var(--neu-inset)}
+  .filter-chip[aria-pressed="true"]{background:linear-gradient(145deg,#e83232,#c1161c);border-color:rgba(255,255,255,.4);color:#fff}
+  .menu-grid{transition:opacity .14s ease, transform .14s ease}
+  .menu-grid.xfading{opacity:0;transform:translateY(8px)}
+  /* 2) SHARED ELEMENT — clon del nombre del producto que viaja hasta el pedido */
+  .fly-title{position:fixed;z-index:90;pointer-events:none;font-family:"Anton",sans-serif;text-transform:uppercase;letter-spacing:.01em;color:var(--ink);white-space:nowrap;transform-origin:center center;will-change:transform,opacity;text-shadow:0 2px 10px rgba(255,246,233,.85)}
+  /* 4) BLUR — con el panel del pedido abierto, el resto de la página se desenfoca y se atenúa.
+     La transición solo existe sin reduced-motion; con el ajuste activo el desenfoque es instantáneo. */
+  @media (prefers-reduced-motion: no-preference){
+    header.topbar, main, footer, .cart-fab{transition:filter .3s ease}
+  }
+  body.cart-open header.topbar, body.cart-open main, body.cart-open footer, body.cart-open .cart-fab{filter:blur(5px) brightness(.94)}
+  /* 3) MAGNIFICATION — suaviza el crecimiento tipo dock (lo activa el JS solo con cursor) */
+  .magnet{transition:transform .18s ease-out, box-shadow .18s ease-out}
 </style>
 </head>
 <body>
@@ -537,6 +557,13 @@
       <div class="sec-head">
         <h2>El menú</h2>
         <p>Arma tu pedido aquí y mándalo por WhatsApp. El servicio a domicilio tiene costo extra, que se confirma en el mensaje.</p>
+      </div>
+      <div class="menu-filters" id="menuFilters" role="group" aria-label="Filtrar el menú">
+        <button type="button" class="filter-chip" data-filter="all" aria-pressed="true">Todo</button>
+        <button type="button" class="filter-chip" data-filter="tacos" aria-pressed="false">Tacos</button>
+        <button type="button" class="filter-chip" data-filter="quesabirrias" aria-pressed="false">Quesabirrias</button>
+        <button type="button" class="filter-chip" data-filter="lonches" aria-pressed="false">Lonches</button>
+        <button type="button" class="filter-chip" data-filter="consome" aria-pressed="false">Consomé</button>
       </div>
       <div class="menu-grid" id="menuGrid"></div>
     </div>
@@ -887,6 +914,7 @@
   ];
   var WA_MAIN = "523316374376";
   var money = function(n){ return "$" + n.toLocaleString("es-MX"); };
+  var reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
   /* ---------- Menú + carrito ---------- */
   var cart = {};       // id -> qty
@@ -897,6 +925,7 @@
   PRODUCTS.forEach(function(p){
     var card = document.createElement("article");
     card.className = "dish";
+    card.setAttribute("data-pid", p.id);
     card.innerHTML =
       '<img src="'+p.img+'" alt="'+p.alt+'" loading="lazy" />' +
       '<div class="dish-body">' +
@@ -954,6 +983,7 @@
     if ((id = t.getAttribute("data-inc"))) { pending[id]++; document.getElementById("pend-"+id).textContent = pending[id]; }
     else if ((id = t.getAttribute("data-dec"))) { if (pending[id] > 1) pending[id]--; document.getElementById("pend-"+id).textContent = pending[id]; }
     else if ((id = t.getAttribute("data-add"))) {
+      flyToCart(t, id);
       cart[id] += pending[id];
       showToast(pending[id] + " × " + PRODUCTS.find(function(p){return p.id===id;}).name + " agregado a tu pedido");
       pending[id] = 1; document.getElementById("pend-"+id).textContent = 1;
@@ -963,11 +993,80 @@
     else if ((id = t.getAttribute("data-cdec"))) { if (cart[id] > 0) cart[id]--; renderCart(); }
   });
 
+  /* ---------- 1) CROSSFADE — filtro del menú con desvanecimiento ---------- */
+  var currentFilter = "all";
+  var menuFilters = document.getElementById("menuFilters");
+  function applyMenuFilter(){
+    Array.prototype.forEach.call(menuGrid.children, function(card){
+      var show = currentFilter === "all" || card.getAttribute("data-pid") === currentFilter;
+      card.style.display = show ? "" : "none";
+    });
+  }
+  if (menuFilters){
+    menuFilters.addEventListener("click", function(e){
+      var chip = e.target.closest(".filter-chip"); if (!chip) return;
+      var f = chip.getAttribute("data-filter");
+      if (f === currentFilter) return;
+      currentFilter = f;
+      menuFilters.querySelectorAll(".filter-chip").forEach(function(c){
+        c.setAttribute("aria-pressed", c === chip ? "true" : "false");
+      });
+      if (reduceMotion){ applyMenuFilter(); return; }
+      menuGrid.classList.add("xfading");
+      setTimeout(function(){ applyMenuFilter(); menuGrid.classList.remove("xfading"); }, 145);
+    });
+  }
+
+  /* ---------- 2) SHARED ELEMENT — el nombre del producto viaja hasta el pedido ---------- */
+  function flyToCart(btn, id){
+    if (reduceMotion) return;
+    var card = btn.closest(".dish");
+    var title = card ? card.querySelector("h3") : null;
+    if (!title) return;
+    var target = panel.classList.contains("open")
+      ? panel.querySelector(".cart-head h2")
+      : document.getElementById("cartFab");
+    if (!target) return;
+    var s = title.getBoundingClientRect();
+    var d = target.getBoundingClientRect();
+    if (!s.width || !d.width) return;
+    var clone = document.createElement("div");
+    clone.className = "fly-title";
+    clone.textContent = title.textContent;
+    var fs = parseFloat(window.getComputedStyle(title).fontSize) || 20;
+    clone.style.left = s.left + "px";
+    clone.style.top = s.top + "px";
+    clone.style.fontSize = fs + "px";
+    document.body.appendChild(clone);
+    var dx = (d.left + d.width / 2) - (s.left + s.width / 2);
+    var dy = (d.top + d.height / 2) - (s.top + s.height / 2);
+    var anim = null;
+    if (clone.animate){
+      anim = clone.animate([
+        { transform:"translate(0,0) scale(1)", opacity:1 },
+        { transform:"translate(" + dx + "px," + dy + "px) scale(.72)", opacity:.3, offset:.78 },
+        { transform:"translate(" + dx + "px," + dy + "px) scale(.58)", opacity:0 }
+      ], { duration:580, easing:"cubic-bezier(.22,.8,.3,1)" });
+    }
+    var done = function(){ if (clone.parentNode) clone.remove(); };
+    if (anim && anim.finished) anim.finished.then(done).catch(done); else setTimeout(done, 640);
+    var fab = document.getElementById("cartFab");
+    if (fab && fab.animate){
+      setTimeout(function(){
+        fab.animate(
+          [{ transform:"scale(1)" }, { transform:"scale(1.07)" }, { transform:"scale(1)" }],
+          { duration:280, easing:"ease-out" }
+        );
+      }, 430);
+    }
+  }
+
   /* ---------- Panel del carrito ---------- */
   var panel = document.getElementById("cartPanel");
   var overlay = document.getElementById("cartOverlay");
-  function openCart(){ panel.classList.add("open"); overlay.classList.add("open"); }
-  function closeCart(){ panel.classList.remove("open"); overlay.classList.remove("open"); }
+  /* 4) BLUR — al abrir el pedido, el resto de la página se desenfoca (clase en body) */
+  function openCart(){ panel.classList.add("open"); overlay.classList.add("open"); document.body.classList.add("cart-open"); }
+  function closeCart(){ panel.classList.remove("open"); overlay.classList.remove("open"); document.body.classList.remove("cart-open"); }
   document.getElementById("cartFab").addEventListener("click", openCart);
   document.getElementById("cartClose").addEventListener("click", closeCart);
   overlay.addEventListener("click", closeCart);
@@ -1269,6 +1368,41 @@
 (function(){
   var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (reduce) return;
+
+  /* ---------- 3) MAGNIFICATION — efecto dock: los botones crecen al acercar el cursor ---------- */
+  var finePointer = window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  if (finePointer){
+    [".topnav", ".hero-cta", ".loc-btns", ".phone-row"].forEach(function(sel){
+      var g = document.querySelector(sel);
+      if (!g) return;
+      var items = Array.prototype.slice.call(g.querySelectorAll("a, button"));
+      if (!items.length) return;
+      items.forEach(function(it){ it.classList.add("magnet"); });
+      var raf = null;
+      g.addEventListener("pointermove", function(e){
+        if (raf) return;
+        var x = e.clientX, y = e.clientY;
+        raf = requestAnimationFrame(function(){
+          raf = null;
+          items.forEach(function(it){
+            var r = it.getBoundingClientRect();
+            if (!r.width) return;
+            var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+            var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+            var max = r.width > 260 ? 1.05 : 1.22;
+            var sc = 1 + (max - 1) * Math.max(0, 1 - dist / 170);
+            it.style.transform = "scale(" + sc.toFixed(3) + ")";
+            if (sc > 1.02){ it.style.position = "relative"; it.style.zIndex = "2"; }
+            else { it.style.position = ""; it.style.zIndex = ""; }
+          });
+        });
+      });
+      g.addEventListener("pointerleave", function(){
+        items.forEach(function(it){ it.style.transform = ""; it.style.position = ""; it.style.zIndex = ""; });
+      });
+    });
+  }
+
   var hero = document.getElementById("hero");
   var mesh = document.getElementById("heroMesh");
   var logo = document.getElementById("heroLogo");
